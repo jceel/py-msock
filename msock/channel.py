@@ -96,6 +96,9 @@ class Channel(object):
     def metadata(self):
         return self._metadata
 
+    def on_data(self, data):
+        self.buffer.push(data)
+
     def read(self, nbytes):
         if self._closed:
             return b''
@@ -114,7 +117,7 @@ class Channel(object):
         self.connection.send(self.id, buf)
 
     def close(self):
-        pass
+        self.connection.destroy_channel(self.id)
 
 
 class ControlChannel(Channel):
@@ -147,8 +150,8 @@ class ControlChannel(Channel):
     def open_channel(self, id, metadata, type=ChannelType.DATA):
         self._call('open_channel', id, metadata, str(type))
 
-    def destroy_channel(self):
-        pass
+    def destroy_channel(self, id):
+        self._call('destroy_channel', id)
 
     def _worker(self):
         while True:
@@ -187,7 +190,7 @@ class ControlChannel(Channel):
             'args': args
         }
 
-        self.write(json.dumps(payload))
+        self.write(json.dumps(payload).encode('utf-8'))
 
     def _call(self, command, *args, timeout=None):
         call = self.Call(command, args)
@@ -198,7 +201,7 @@ class ControlChannel(Channel):
         self._calls.pop(call.id, None)
         return ret
 
-    def _cmd_close_channel(self, id):
+    def _cmd_destroy_channel(self, id):
         self._logger.debug('Received close channel request: id={0}'.format(id))
 
     def _cmd_open_channel(self, id, metadata, type):
@@ -208,7 +211,7 @@ class ControlChannel(Channel):
             type
         ))
 
-        chan = Channel(self.connection, id, metadata, type)
+        chan = self.connection.channel_factory(id, metadata)
         self.connection._channels[id] = chan
         self.connection.on_channel_created(chan)
 

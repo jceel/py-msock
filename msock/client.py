@@ -44,6 +44,7 @@ class Connection(object):
         self.on_channel_created = lambda chan: None
         self.on_channel_destroyed = lambda chan: None
         self.on_closed = lambda: None
+        self.channel_factory = lambda id, metadata: Channel(self, id, metadata)
         self._control_channel = None
         self._channels = {}
         self._recv_thread = None
@@ -57,13 +58,14 @@ class Connection(object):
     def create_channel(self, metadata):
         id = max(self._channels) + 1
         self._control_channel.open_channel(id, metadata)
-        chan = Channel(self, id, metadata)
+        chan = self.channel_factory(id, metadata)
         self._channels[id] = chan
         self.on_channel_created(chan)
         return chan
 
     def destroy_channel(self, id):
-        pass
+        self._control_channel.destroy_channel(id)
+        del self._channels[id]
 
     def open(self, client=False):
         self._recv_thread = threading.Thread(target=self._recv, daemon=True, name='msock recv thread')
@@ -81,7 +83,7 @@ class Connection(object):
 
         with self._lock:
             self._socket.send(header)
-            self._socket.send(data.encode('utf-8'))
+            self._socket.send(data)
 
     def _recv(self):
         while True:
@@ -102,7 +104,7 @@ class Connection(object):
                 continue
 
             chan = self.channels[channel_id]
-            chan.buffer.push(data)
+            chan.on_data(data)
 
     def _close(self):
         self._logger.debug('Connection closed')
