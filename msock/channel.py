@@ -25,12 +25,10 @@
 #
 #####################################################################
 
-import logging
-import time
+import os
+import socket
 import enum
-import json
-import uuid
-import queue
+import logging
 import threading
 
 
@@ -42,43 +40,20 @@ class ChannelType(enum.Enum):
     DATA = 'data'
 
 
-class RingBuffer(object):
-    def __init__(self):
-        self._buffers = queue.Queue()
-
-    def push(self, buf):
-        self._buffers.put(buf)
-
-    def pop(self, nbytes=0):
-        if nbytes == 0:
-            return self._buffers.get()
-
-        done = 0
-        left = nbytes
-        result = bytearray()
-
-        while done < nbytes:
-            buf = self._buffers.queue[0]
-            if left >= len(buf):
-                self._buffers.get()
-                result.extend(buf)
-                done += len(buf)
-            else:
-                result.extend(buf[left:])
-                del buf[left:]
-                done += left
-
-        return result
-
-
 class Channel(object):
-    def __init__(self, connection, id, metadata=None, type=ChannelType.DATA):
+    def __init__(self, connection, id, type=ChannelType.DATA):
+        self._logger = logging.getLogger(self.__class__.__name__)
         self._id = id
         self._type = type
-        self._metadata = metadata
         self._connection = connection
         self._closed = False
-        self.buffer = RingBuffer()
+        self._master, self._slave = socket.socketpair()
+        self._send_thread = threading.Thread(
+            target=self._worker,
+            name='channel{0} send thread'.format(self.id),
+            daemon=True
+        )
+        self._send_thread.start()
 
     @property
     def connection(self):
@@ -92,136 +67,29 @@ class Channel(object):
     def id(self):
         return self._id
 
-    @property
-    def metadata(self):
-        return self._metadata
-
     def on_data(self, data):
-        self.buffer.push(data)
+        if data == b'':
+            self._logger.debug('Channel {0} closed'.format(self._id))
+            self._slave.shutdown(socket.SHUT_WR)
+            return
 
-    def read(self, nbytes):
-        if self._closed:
-            return b''
+        self._slave.send(data)
 
-    def readmsg(self):
-        if self._closed:
-            return b''
+    def recv(self, nbytes):
+        return self._master.recv(nbytes)
 
-        return self.buffer.pop()
+    def recv_into(self, buffer, nbytes=None):
+        return self._master.recv_into(buffer, nbytes)
 
-    def readinto(self, buffer, nbytes=0):
-        if self._closed:
-            return 0
-
-    def write(self, buf):
-        self.connection.send(self.id, buf)
+    def send(self, buffer):
+        self._master.send(buffer)
 
     def close(self):
-        self.connection.destroy_channel(self.id)
-
-
-class ControlChannel(Channel):
-    class Call(object):
-        def __init__(self, command, args, id=None):
-            self.command = command
-            self.args = args
-            self.result = None
-            self.id = str(id or uuid.uuid4())
-            self.cv = threading.Event()
-
-    class CallException(RuntimeError):
-        pass
-
-    def __init__(self, connection, id, client=False):
-        super(ControlChannel, self).__init__(connection, id, type=ChannelType.CONTROL)
-        self._calls = {}
-        self._logger = logging.getLogger(self.__class__.__name__)
-        self._worker = threading.Thread(target=self._worker, name='msock control thread', daemon=True)
-        self._worker.start()
-        if client:
-            self._keepalive_worker = threading.Thread(
-                target=self._keepalive,
-                name='msock keepalive thread',
-                daemon=True)
-            self._keepalive_worker.start()
-
-        self._logger.debug('Created, id={0}'.format(id))
-
-    def open_channel(self, id, metadata, type=ChannelType.DATA):
-        self._call('open_channel', id, metadata, str(type))
-
-    def destroy_channel(self, id):
-        self._call('destroy_channel', id)
+        self._master.shutdown(socket.SHUT_RDWR)
 
     def _worker(self):
         while True:
-            msg = self.readmsg()
-            if msg == b'':
+            data = os.read(self._slave.fileno(), 1024)
+            self._connection.send(self.id, data)
+            if data == b'':
                 return
-
-            try:
-                msg = json.loads(msg.decode('utf-8'))
-            except ValueError:
-                return
-
-            id = msg['id']
-            name = msg['name']
-
-            if msg['type'] == 'command':
-                func = getattr(self, '_cmd_{0}'.format(name), None)
-                if func and callable(func):
-                    try:
-                        resp = func(*msg['args'])
-                        self._send(id, 'response', name, resp)
-                    except:
-                        pass
-                else:
-                    pass
-
-            if msg['type'] == 'response':
-                if id in self._calls:
-                    self._calls[id].cv.set()
-
-    def _send(self, id, type, name, args):
-        payload = {
-            'id': id,
-            'type': type,
-            'name': name,
-            'args': args
-        }
-
-        self.write(json.dumps(payload).encode('utf-8'))
-
-    def _call(self, command, *args, timeout=None):
-        call = self.Call(command, args)
-        self._calls[call.id] = call
-        self._send(call.id, 'command', call.command, call.args)
-        call.cv.wait(timeout)
-        ret = call.result
-        self._calls.pop(call.id, None)
-        return ret
-
-    def _cmd_destroy_channel(self, id):
-        self._logger.debug('Received close channel request: id={0}'.format(id))
-
-    def _cmd_open_channel(self, id, metadata, type):
-        self._logger.debug('Received open channel request: id={0}, metadata={1}, type={2}'.format(
-            id,
-            metadata,
-            type
-        ))
-
-        chan = self.connection.channel_factory(id, metadata)
-        self.connection._channels[id] = chan
-        self.connection.on_channel_created(chan)
-
-    def _cmd_ping(self):
-        self._logger.debug('Received keepalive message')
-        return 'pong'
-
-    def _keepalive(self):
-        while True:
-            time.sleep(KEEPALIVE_INTERVAL)
-            self._logger.debug('Sending keepalive message')
-            if self._call('ping', 30) == 'pong':
-                pass

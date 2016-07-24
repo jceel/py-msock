@@ -30,7 +30,7 @@ import socket
 import threading
 import struct
 import urllib.parse
-from msock.channel import Channel, ControlChannel
+from msock.channel import Channel
 
 
 HEADER_MAGIC = 0x5a5a5a5a
@@ -44,8 +44,7 @@ class Connection(object):
         self.on_channel_created = lambda chan: None
         self.on_channel_destroyed = lambda chan: None
         self.on_closed = lambda: None
-        self.channel_factory = lambda id, metadata: Channel(self, id, metadata)
-        self._control_channel = None
+        self.channel_factory = lambda id: Channel(self, id)
         self._channels = {}
         self._recv_thread = None
         self._socket = None
@@ -55,22 +54,17 @@ class Connection(object):
     def channels(self):
         return self._channels
 
-    def create_channel(self, metadata):
-        id = max(self._channels) + 1
-        self._control_channel.open_channel(id, metadata)
-        chan = self.channel_factory(id, metadata)
+    def create_channel(self, id):
+        chan = self.channel_factory(id)
         self._channels[id] = chan
         self.on_channel_created(chan)
         return chan
 
     def destroy_channel(self, id):
-        self._control_channel.destroy_channel(id)
         del self._channels[id]
 
-    def open(self, client=False):
+    def open(self):
         self._recv_thread = threading.Thread(target=self._recv, daemon=True, name='msock recv thread')
-        self._control_channel = ControlChannel(self, 0, client)
-        self._channels[0] = self._control_channel
         self._recv_thread.start()
 
     def send(self, channel_id, data):
@@ -134,7 +128,7 @@ class Client(Connection):
 
         self._socket = socket.socket(af, socket.SOCK_STREAM)
         self._socket.connect(address)
-        self.open(True)
+        self.open()
 
     def disconnect(self):
         self.close()
