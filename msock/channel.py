@@ -27,6 +27,7 @@
 
 import os
 import socket
+import select
 import enum
 import logging
 import threading
@@ -75,13 +76,19 @@ class Channel(object):
 
         self._slave.send(data)
 
-    def recv(self, nbytes):
+    def fileno(self):
+        return self._master.fileno()
+
+    def fileobj(self):
+        return self._master
+
+    def read(self, nbytes):
         return self._master.recv(nbytes)
 
-    def recv_into(self, buffer, nbytes=None):
+    def read_into(self, buffer, nbytes=None):
         return self._master.recv_into(buffer, nbytes)
 
-    def send(self, buffer):
+    def write(self, buffer):
         self._master.send(buffer)
 
     def close(self):
@@ -89,7 +96,10 @@ class Channel(object):
 
     def _worker(self):
         while True:
-            data = os.read(self._slave.fileno(), 1024)
-            self._connection.send(self.id, data)
-            if data == b'':
-                return
+            r, _, _ = select.select([self._slave.fileno()], [], [])
+            if self._slave.fileno() in r:
+                data = os.read(self._slave.fileno(), 1024)
+                self._connection.send(self.id, data)
+                if data == b'':
+                    self._logger.debug('EOF received on channel {0}, closing'.format(self._id))
+                    return
