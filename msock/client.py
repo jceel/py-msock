@@ -55,7 +55,7 @@ class Connection(object):
         return self._channels
 
     def create_channel(self, id=None):
-        if not id:
+        if id is None:
             id = max(self.channels.keys()) + 1
 
         chan = self.channel_factory(id)
