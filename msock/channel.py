@@ -31,6 +31,7 @@ import select
 import enum
 import logging
 import threading
+from msock.utils import recvall
 
 
 KEEPALIVE_INTERVAL = 30
@@ -82,14 +83,20 @@ class Channel(object):
     def fileobj(self):
         return self._master
 
-    def read(self, nbytes):
+    def recv(self, nbytes):
         return self._master.recv(nbytes)
+
+    def read(self, nbytes):
+        return recvall(self._master, nbytes)
 
     def read_into(self, buffer, nbytes=None):
         return self._master.recv_into(buffer, nbytes)
 
     def write(self, buffer):
-        self._master.send(buffer)
+        self._master.sendall(buffer)
+
+    def send(self, buffer):
+        return self._master.send(buffer)
 
     def close(self):
         self._master.shutdown(socket.SHUT_RDWR)

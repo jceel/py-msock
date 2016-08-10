@@ -31,6 +31,7 @@ import threading
 import struct
 import urllib.parse
 from msock.channel import Channel
+from msock.utils import recvall
 
 
 HEADER_MAGIC = 0x5a5a5a5a
@@ -61,9 +62,11 @@ class Connection(object):
         chan = self.channel_factory(id)
         self._channels[id] = chan
         self.on_channel_created(chan)
+        logging.debug('Created channel {0}'.format(id))
         return chan
 
     def destroy_channel(self, id):
+        logging.debug('Destroying channel {0}'.format(id))
         del self._channels[id]
 
     def open(self):
@@ -84,17 +87,19 @@ class Connection(object):
 
     def _recv(self):
         while True:
-            data = self._socket.recv(HEADER_SIZE)
+            data = recvall(self._socket, HEADER_SIZE)
             if data == b'':
+                self._logger.debug('EOF received')
                 self._close()
                 return
 
             magic, channel_id, length = struct.unpack(HEADER_FORMAT, data)
             if magic != HEADER_MAGIC:
+                self._logger.debug('Wrong magic received ({0:04x})'.format(magic))
                 self._close()
                 return
 
-            data = self._socket.recv(length)
+            data = recvall(self._socket, length)
             if channel_id not in self._channels:
                 # discard the data
                 self._logger.warning('Data from unknown channel {0} received, discarding'.format(channel_id))
@@ -105,8 +110,9 @@ class Connection(object):
 
     def _close(self):
         self._logger.debug('Connection closed')
-        self._socket.close()
-        self.on_closed()
+        with self._lock:
+            self._socket.close()
+            self.on_closed()
 
     def close(self):
         self._socket.shutdown(socket.SHUT_RDWR)
