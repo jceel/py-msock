@@ -84,7 +84,7 @@ class Channel(object):
         return self._master
 
     def read1(self, nbytes):
-        return self._master.recv(bytes)
+        return self._master.recv(nbytes)
 
     def recv(self, nbytes):
         return self._master.recv(nbytes)
