@@ -82,8 +82,8 @@ class Connection(object):
         )
 
         with self._lock:
-            self._socket.send(header)
-            self._socket.send(data)
+            self._socket.sendall(header)
+            self._socket.sendall(data)
 
     def _recv(self):
         while True:

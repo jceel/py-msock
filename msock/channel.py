@@ -75,7 +75,7 @@ class Channel(object):
             self._slave.shutdown(socket.SHUT_WR)
             return
 
-        self._slave.send(data)
+        self._slave.sendall(data)
 
     def fileno(self):
         return self._master.fileno()

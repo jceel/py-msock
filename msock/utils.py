@@ -32,6 +32,9 @@ def recvall(s, nbytes):
 
     while nbytes:
         r = s.recv_into(view, nbytes)
+        if r < 1:
+            return b''
+
         view = view[r:]
         nbytes -= r
 
