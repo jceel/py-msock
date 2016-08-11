@@ -83,6 +83,9 @@ class Channel(object):
     def fileobj(self):
         return self._master
 
+    def read1(self, nbytes):
+        return self._master.recv(bytes)
+
     def recv(self, nbytes):
         return self._master.recv(nbytes)
 
