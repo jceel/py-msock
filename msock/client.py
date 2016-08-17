@@ -49,6 +49,7 @@ class Connection(object):
         self._channels = {}
         self._recv_thread = None
         self._socket = None
+        self._closed = False
         self._lock = threading.RLock()
 
     @property
@@ -74,6 +75,9 @@ class Connection(object):
         self._recv_thread.start()
 
     def send(self, channel_id, data):
+        if self._closed:
+            return
+
         header = struct.pack(
             HEADER_FORMAT,
             HEADER_MAGIC,
@@ -109,9 +113,11 @@ class Connection(object):
             chan.on_data(data)
 
     def _close(self):
+        self._closed = True
         self._logger.debug('Connection closed')
-        for i in self.channels:
-            i.close()
+        for i in self.channels.values():
+            if not i.closed:
+                i.close()
 
         self.channels.clear()
         with self._lock:
