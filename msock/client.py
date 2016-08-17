@@ -110,6 +110,10 @@ class Connection(object):
 
     def _close(self):
         self._logger.debug('Connection closed')
+        for i in self.channels:
+            i.close()
+
+        self.channels.clear()
         with self._lock:
             self._socket.close()
             self.on_closed()

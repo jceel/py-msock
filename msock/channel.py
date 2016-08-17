@@ -66,6 +66,10 @@ class Channel(object):
         return self._type
 
     @property
+    def closed(self):
+        return self._closed
+
+    @property
     def id(self):
         return self._id
 
@@ -73,6 +77,7 @@ class Channel(object):
         if data == b'':
             self._logger.debug('Channel {0} closed'.format(self._id))
             self._slave.shutdown(socket.SHUT_WR)
+            self._closed = True
             return
 
         self._slave.sendall(data)
@@ -112,4 +117,5 @@ class Channel(object):
                 self._connection.send(self.id, data)
                 if data == b'':
                     self._logger.debug('EOF received on channel {0}, closing'.format(self._id))
+                    self._closed = True
                     return
