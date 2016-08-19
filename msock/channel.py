@@ -111,7 +111,14 @@ class Channel(object):
 
     def _worker(self):
         while True:
-            r, _, _ = select.select([self._slave.fileno()], [], [])
+            try:
+                r, _, _ = select.select([self._slave.fileno()], [], [])
+            except OSError as err:
+                self._logger.warning('select() failed on channel {0}: {1}'.format(self._id, err))
+                self._logger.warning('closing')
+                self._closed = True
+                return
+
             if self._slave.fileno() in r:
                 data = os.read(self._slave.fileno(), 1024)
                 self._connection.send(self.id, data)

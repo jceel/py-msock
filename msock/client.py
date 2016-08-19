@@ -115,7 +115,7 @@ class Connection(object):
     def _close(self):
         self._closed = True
         self._logger.debug('Connection closed')
-        for i in self.channels.values():
+        for i in list(self.channels.values()):
             if not i.closed:
                 i.close()
 
