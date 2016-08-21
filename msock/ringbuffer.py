@@ -93,9 +93,10 @@ class RingBuffer(object):
     def read(self, count):
         with self.cv:
             if self.empty:
-                self.cv.wait_for(lambda: not self.empty or self.closed)
                 if self.closed:
                     return b''
+
+                self.cv.wait_for(lambda: not self.empty or self.closed)
 
             toread = min(count, self.used_space)
 
