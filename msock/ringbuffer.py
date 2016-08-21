@@ -90,6 +90,15 @@ class RingBuffer(object):
                 self.cv.notify_all()
                 return towrite
 
+    def writeall(self, data):
+        done = 0
+        while done < len(data):
+            ret = self.write(data[done:])
+            if ret == 0:
+                break
+
+            done += ret
+
     def read(self, count):
         with self.cv:
             if self.empty:
@@ -121,6 +130,19 @@ class RingBuffer(object):
 
                 self.cv.notify_all()
                 return result
+
+    def readall(self, count):
+        result = b''
+        done = 0
+
+        while done < count:
+            ret = self.read(count - done)
+            if ret == b'':
+                break
+
+            result += ret
+
+        return result
 
     def close(self):
         with self.cv:

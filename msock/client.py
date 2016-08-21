@@ -25,6 +25,7 @@
 #
 #####################################################################
 
+import errno
 import logging
 import socket
 import threading
@@ -48,6 +49,7 @@ class Connection(object):
         self.channel_factory = lambda id: Channel(self, id)
         self._channels = {}
         self._recv_thread = None
+        self._address = None
         self._socket = None
         self._closed = False
         self._lock = threading.RLock()
@@ -55,6 +57,10 @@ class Connection(object):
     @property
     def channels(self):
         return self._channels
+
+    @property
+    def remote_address(self):
+        return self._address
 
     def create_channel(self, id=None):
         if id is None:
@@ -71,6 +77,7 @@ class Connection(object):
         del self._channels[id]
 
     def open(self):
+        self._closed = False
         self._recv_thread = threading.Thread(target=self._recv, daemon=True, name='msock recv thread')
         self._recv_thread.start()
 
@@ -86,31 +93,40 @@ class Connection(object):
         )
 
         with self._lock:
-            self._socket.sendall(header)
-            self._socket.sendall(data)
+            try:
+                self._socket.sendall(header)
+                self._socket.sendall(data)
+            except OSError as err:
+                if err.errno == errno.EPIPE:
+                    return
 
     def _recv(self):
         while True:
-            data = recvall(self._socket, HEADER_SIZE)
-            if data == b'':
-                self._logger.debug('EOF received')
+            try:
+                data = recvall(self._socket, HEADER_SIZE)
+                if data == b'':
+                    self._logger.debug('EOF received')
+                    self._close()
+                    return
+
+                magic, channel_id, length = struct.unpack(HEADER_FORMAT, data)
+                if magic != HEADER_MAGIC:
+                    self._logger.debug('Wrong magic received ({0:04x})'.format(magic))
+                    self._close()
+                    return
+
+                data = recvall(self._socket, length)
+                if channel_id not in self._channels:
+                    # discard the data
+                    self._logger.warning('Data from unknown channel {0} received, discarding'.format(channel_id))
+                    continue
+
+                chan = self.channels[channel_id]
+                chan.on_data(data)
+            except OSError as err:
+                self._logger.info('Read failed: {0}'.format(err))
                 self._close()
                 return
-
-            magic, channel_id, length = struct.unpack(HEADER_FORMAT, data)
-            if magic != HEADER_MAGIC:
-                self._logger.debug('Wrong magic received ({0:04x})'.format(magic))
-                self._close()
-                return
-
-            data = recvall(self._socket, length)
-            if channel_id not in self._channels:
-                # discard the data
-                self._logger.warning('Data from unknown channel {0} received, discarding'.format(channel_id))
-                continue
-
-            chan = self.channels[channel_id]
-            chan.on_data(data)
 
     def _close(self):
         self._closed = True
@@ -119,14 +135,18 @@ class Connection(object):
             if not i.closed:
                 i.close()
 
-        self.channels.clear()
+        self._channels.clear()
+
         with self._lock:
             self._socket.close()
             self.on_closed()
 
     def close(self):
+        if self._closed:
+            return
+
         self._socket.shutdown(socket.SHUT_RDWR)
-        self._close()
+        self._recv_thread.join()
 
 
 class Client(Connection):
@@ -147,6 +167,7 @@ class Client(Connection):
 
         self._socket = socket.socket(af, socket.SOCK_STREAM)
         self._socket.connect(address)
+        print('main socket fd: {0}'.format(self._socket.fileno()))
         self.open()
 
     def disconnect(self):

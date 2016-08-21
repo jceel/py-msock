@@ -25,13 +25,10 @@
 #
 #####################################################################
 
-import os
-import socket
-import select
 import enum
 import logging
 import threading
-from msock.utils import recvall
+from msock.ringbuffer import RingBuffer
 
 
 KEEPALIVE_INTERVAL = 30
@@ -43,18 +40,21 @@ class ChannelType(enum.Enum):
 
 
 class Channel(object):
-    def __init__(self, connection, id, type=ChannelType.DATA):
+    def __init__(self, connection, id, type=ChannelType.DATA, bufsize=4096):
         self._logger = logging.getLogger(self.__class__.__name__)
         self._id = id
         self._type = type
         self._connection = connection
         self._closed = False
-        self._master, self._slave = socket.socketpair()
+        self._recvq = RingBuffer(bufsize)
+        self._sendq = RingBuffer(bufsize)
+
         self._send_thread = threading.Thread(
             target=self._worker,
             name='channel{0} send thread'.format(self.id),
             daemon=True
         )
+
         self._send_thread.start()
 
     @property
@@ -76,53 +76,40 @@ class Channel(object):
     def on_data(self, data):
         if data == b'':
             self._logger.debug('Channel {0} closed'.format(self._id))
-            self._slave.shutdown(socket.SHUT_WR)
-            self._closed = True
+            self._recvq.close()
             return
 
-        self._slave.sendall(data)
-
-    def fileno(self):
-        return self._master.fileno()
-
-    def fileobj(self):
-        return self._master
+        self._logger.debug('Read on recvq: {0}'.format(data))
+        self._recvq.writeall(data)
 
     def read1(self, nbytes):
-        return self._master.recv(nbytes)
+        return self._recvq.read(nbytes)
 
     def recv(self, nbytes):
-        return self._master.recv(nbytes)
+        return self._recvq.read(nbytes)
 
     def read(self, nbytes):
-        return recvall(self._master, nbytes)
-
-    def read_into(self, buffer, nbytes=None):
-        return self._master.recv_into(buffer, nbytes)
+        return self._recvq.readall(nbytes)
 
     def write(self, buffer):
-        self._master.sendall(buffer)
+        self._sendq.writeall(buffer)
 
     def send(self, buffer):
-        return self._master.send(buffer)
+        return self._sendq.write(buffer)
 
     def close(self):
-        self._master.shutdown(socket.SHUT_RDWR)
+        self._closed = True
+        self._logger.debug('Cleaning up resources associated with channel {0}'.format(self._id))
+        self._sendq.close()
+        self._send_thread.join()
 
     def _worker(self):
         while True:
-            try:
-                r, _, _ = select.select([self._slave.fileno()], [], [])
-            except OSError as err:
-                self._logger.warning('select() failed on channel {0}: {1}'.format(self._id, err))
-                self._logger.warning('closing')
-                self._closed = True
+            data = self._sendq.read(1024)
+            self._logger.debug('Read on sendq: {0}'.format(data))
+            self._connection.send(self.id, data)
+            if data == b'':
+                self._logger.debug('EOF received on channel {0}, closing'.format(self._id))
+                self._sendq.close()
+                self._recvq.close()
                 return
-
-            if self._slave.fileno() in r:
-                data = os.read(self._slave.fileno(), 1024)
-                self._connection.send(self.id, data)
-                if data == b'':
-                    self._logger.debug('EOF received on channel {0}, closing'.format(self._id))
-                    self._closed = True
-                    return
